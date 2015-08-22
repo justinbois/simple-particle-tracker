@@ -126,7 +126,36 @@ def subpixel_locate(im, peak, selem, n_iters=20, fit_gauss=True,
                     fit_gauss_bg=True, return_estimate_on_error=True, 
                     quiet=True):
     """
-    Iterative fracshifts
+    Perform subpixel localization of a subimage with a spot.
+
+    im : ndarray
+        The image containing the spots.
+    peak : array_like, shape (2,)
+        The i, j coordinate of the center of the spot, as determined
+        to integer pixel accuracy.
+    selem : ndarray
+        Structuring element for the spot region.
+    n_iters : int
+        Number of iterations for center-of-mass fractional 
+        shifting calculation.
+    fit_gauss : bool
+        If True, fit the spot with a Gaussian peak after
+        center-of-mass by fractional shifting calculation.
+    fit_gauss_bg : bool
+        If True, include a background term in the Gaussian
+        fit of the spot.  Ignored if fit_gauss is False.
+    return_estimate_on_error : bool
+        If True, return the center-of-mass estimate for the spot
+        center if fractional shifting or Gaussian fitting fail.
+        Otherwise, raise a RuntimeError.
+    quiet : bool
+        If True, suppress reporting and warnings.
+        
+    Returns
+    -------
+    output : ndarray, shape(2,)
+        The i, j coordinates of the center of the spot
+        as a NumPy array.
     """
 
     # Make sure structuring element has more than four points for fit Gauss
@@ -167,7 +196,7 @@ def subpixel_locate(im, peak, selem, n_iters=20, fit_gauss=True,
                 return peak + center_of_mass(i_pos, j_pos,
                                              sub_im[1:-1, 1:-1][ii, jj])
             else:
-                raise ValueError('Subpixel location is too big.')
+                raise RuntimeError('Subpixel location is too big.')
 
         new_sub_im = scipy.ndimage.interpolation.shift(sub_im, (eps_i, eps_j),
                                                        order=1)
@@ -177,7 +206,6 @@ def subpixel_locate(im, peak, selem, n_iters=20, fit_gauss=True,
 
     # Fit Gaussian to final subim
     if fit_gauss:
-        print('We got here.')
         p_0 = _approx_gaussian_params(i_pos, j_pos,
                                       new_sub_im[1:-1, 1:-1][ii, jj])
 
