@@ -122,13 +122,14 @@ def center_of_mass(x, y, z):
 
 
 #%%
-def subpixel_locate(im, peak, selem, n_iters=20, fit_gauss=True,
-                    return_estimate_on_error=True, quiet=True):
+def subpixel_locate(im, peak, selem, n_iters=20, fit_gauss=True, 
+                    fit_gauss_bg=True, return_estimate_on_error=True, 
+                    quiet=True):
     """
     Iterative fracshifts
     """
 
-    # Maks sure structuring element has more than four points for fit Gauss
+    # Make sure structuring element has more than four points for fit Gauss
     if selem.sum() <= 4 and fit_gauss:
         raise ValueError(
             'Can only have fit_guass = True with more than 4 pixels in selem.')
@@ -176,13 +177,23 @@ def subpixel_locate(im, peak, selem, n_iters=20, fit_gauss=True,
 
     # Fit Gaussian to final subim
     if fit_gauss:
+        print('We got here.')
         p_0 = _approx_gaussian_params(i_pos, j_pos,
                                       new_sub_im[1:-1, 1:-1][ii, jj])
 
-        p, lsq_success = _fit_gaussian(
+        # Perform different regressions if we have background as well
+        if fit_gauss_bg:
+            p_0 = np.concatenate(((p_0[0],), (0.0,), p_0[1:]))
+            fit_fun = _fit_gaussian_plus_background
+        else:
+            fit_fun = _fit_gaussian
+
+        # Perform the Gaussian regression
+        p, lsq_success = fit_fun(
             i_pos, j_pos, new_sub_im[1:-1, 1:-1][ii, jj], p_0)
 
-        a, eps_i, eps_j, sigma = p
+        # Extract parameters that we need, also for validation
+        eps_i, eps_j, sigma = p[-3:]
 
         # If we failed or don't validate, just return p_0
         if lsq_success:
@@ -195,6 +206,12 @@ def subpixel_locate(im, peak, selem, n_iters=20, fit_gauss=True,
                     print('Setting center to center of mass estimate.')
                 a, eps_i, eps_j, sigma = p_0
         else:
+            if not quiet:
+                print('Warning: Gaussian fitting in subpixel loc failed with:')
+                print('    eps_i', eps_i)
+                print('    eps_j:', eps_j)
+                print('    sigma:', sigma)
+                print('Setting center to center of mass estimate.')
             a, eps_i, eps_j, sigma = p_0
 
     return np.array([i + eps_i, j + eps_j])
@@ -202,8 +219,8 @@ def subpixel_locate(im, peak, selem, n_iters=20, fit_gauss=True,
 
 #%%
 def particle_centers(im, particle_size, blur=True, noise_size=1,
-                     boxcar=True, fit_gauss=True, selem_width=3,
-                     selem_type='disk', n_iters=20, quiet=True):
+                     boxcar=True, fit_gauss=True, fit_gauss_bg=True, 
+                     selem_width=3, selem_type='disk', n_iters=20, quiet=True):
     """
     Find the centers of all putative particles in an image
 
@@ -223,6 +240,9 @@ def particle_centers(im, particle_size, blur=True, noise_size=1,
     fit_gauss : bool
         True if least squares is used for subpixel localization.
         Otherwise, subpixel localization is done using moments.
+    fit_gauss_bg : bool
+        True if we include a background term in our Gaussian fit for
+        subpixel localization.  Ignored if fit_gauss is False.
     selem_width : int
         The width of the structuring element used when doing
         subpixel localization.
@@ -246,14 +266,8 @@ def particle_centers(im, particle_size, blur=True, noise_size=1,
         raise ValueError('Only disk and square selems allowed.')
     else:
         selem = skimage.morphology.square(selem_width)
-
-    # Construct structuring element for particle
-    if part_size == 3:
-        selem = skimage.morphology.square(part_size)
-    else:
-        selem = skimage.morphology.disk((part_size - 1) // 2)
-
-    # Perform Gaussian blur and background subtraction
+ 
+   # Perform Gaussian blur and background subtraction
     im = preprocess(im, blur=blur, boxcar=boxcar, noise_size=noise_size,
                     boxcar_width=boxcar_width)
 
@@ -265,16 +279,18 @@ def particle_centers(im, particle_size, blur=True, noise_size=1,
 
     # Get subpixel resolution
     for i, peak in enumerate(peaks_pixel):
-        centers[i] = subpixel_locate(im, peak, selem, fit_gauss=fit_gauss,
-                                     n_iters=n_iters, quiet=quiet)
+        centers[i] = subpixel_locate(
+            im, peak, selem, fit_gauss=fit_gauss, fit_gauss_bg=fit_gauss_bg,
+            n_iters=n_iters, quiet=quiet)
 
     return centers
 
 
 #%%
 def centers_from_ims(im_list, particle_size, blur=True, noise_size=1,
-                     boxcar=True, fit_gauss=True, selem_width=3,
-                     selem_type='disk', n_iters=20, quiet=False):
+                     boxcar=True, fit_gauss=True, fit_gauss_bg=True, 
+                     selem_width=3, selem_type='disk', n_iters=20, 
+                     quiet=False):
     """
     Compute centers of particles in a list of images.
 
@@ -298,6 +314,9 @@ def centers_from_ims(im_list, particle_size, blur=True, noise_size=1,
     fit_gauss : bool
         True if least squares is used for subpixel localization.
         Otherwise, subpixel localization is done using moments.
+    fit_gauss_bg : bool
+        True if we include a background term in our Gaussian fit for
+        subpixel localization.  Ignored if fit_gauss is False.
     selem_width : int
         The width of the structuring element used when doing
         subpixel localization.
@@ -330,8 +349,9 @@ def centers_from_ims(im_list, particle_size, blur=True, noise_size=1,
 
         centers = particle_centers(
             im, particle_size, blur=blur, noise_size=noise_size,
-            fit_gauss=fit_gauss, selem_width=selem_width,
-            selem_type=selem_type, n_iters=n_iters, quiet=quiet)
+            fit_gauss=fit_gauss, fit_gauss_bg=fit_gauss_bg, 
+            selem_width=selem_width, selem_type=selem_type, n_iters=n_iters, 
+            quiet=quiet)
 
         index = np.ones(centers.shape[0]) * i
         df2 = pd.DataFrame(columns=['i', 'j'], index=index, data=centers)
@@ -341,7 +361,7 @@ def centers_from_ims(im_list, particle_size, blur=True, noise_size=1,
     return df
 
 
-#%% #########
+#%%
 def _read_image(fname):
     """
     Read in an image.  If it has multiple channels, take first non-zero
@@ -397,6 +417,33 @@ def _sym_gaussian(x, y, p):
     return a**2 * np.exp(-((x - x_0)**2 + (y - y_0)**2) / (2.0 * sigma**2))
 
 
+#%% #########
+def _sym_gaussian_plus_background(x, y, p):
+    """
+    Compute a symmetric 2D Gaussian function,
+    math::
+        z(x,y) = b^2 + a^2 \exp\left[-\frac{((x - x_0)^2 + (y - y_0)^2)}
+                                           {2 \sigma^2}\right]
+
+    Parameters
+    ----------
+    x : ndarray
+        Values of x-coordinates (independent variable) for data.
+    y : ndarray
+        Values of y-coordinates (independent variable) for data.
+    p : array_like, shape (5,)
+        The parameters (a, b, x_0, y_0, sigma)
+
+    Returns
+    -------
+    output : ndarray, shape like x
+        The symmetric 2D Gaussian plus background function
+    """
+    a, b, x_0, y_0, sigma = p
+    return b**2 + a**2 * np.exp(-((x - x_0)**2 + (y - y_0)**2) \
+                                    / (2.0 * sigma**2))
+
+
 #%%
 def _sym_gaussian_resids(p, x, y, z):
     """
@@ -420,6 +467,31 @@ def _sym_gaussian_resids(p, x, y, z):
         and the data.
     """
     return z - _sym_gaussian(x, y, p)
+
+
+#%%
+def _sym_gaussian_plus_background_resids(p, x, y, z):
+    """
+    Residuals to be sent into leastsq
+
+    Parameters
+    ----------
+    p : array_like, shape (5,)
+        The parameters (a, b, x_0, y_0, sigma)
+    x : ndarray
+        Values of x-coordinates (independent variable) for data.
+    y : ndarray
+        Values of y-coordinates (independent variable) for data.
+    z : ndarray
+        Values of z-coordinates (dependent variable) for data.
+
+    Returns
+    -------
+    output : array_like, shape like z
+        The residuals between the computed symmetric Gaussian
+        and the data.
+    """
+    return z - _sym_gaussian_plus_background(x, y, p)
 
 
 #%%
@@ -547,5 +619,54 @@ def _fit_gaussian(x, y, z, p_0):
     # estimate.
     if ier in (1, 2, 3, 4):
         return np.array((popt[0]**2, popt[1], popt[2], np.abs(popt[3]))), True
+    else:
+        return p_0, False
+        
+        
+#%%
+def _fit_gaussian_plus_background(x, y, z, p_0):
+    """
+    Fits a symmetric Gaussian to data x, y, z.  I.e.,
+    math::
+        z(x,y) = b + a \exp\left[-\frac{((x - x_0)^2 + (y - y_0)^2)}
+                                       {2 \sigma^2}\right]
+
+    Parameters
+    ----------
+    x : ndarray
+        Values of x-coordinates (independent variable) for data.
+    y : ndarray
+        Values of y-coordinates (independent variable) for data.
+    z : ndarray
+        Values of z-coordinates (dependent variable) for data.
+    p_0 : array_like, shape (5,)
+        Guesses for values of (a, b, x_0, y_0, sigma).  Usually these
+        are generated by approx_gaussian_params.
+
+    Returns
+    -------
+    params : ndarray
+        Most probable (a, x_0, y_0, sigma) as an array
+    lsq_success : bool
+        True if least squares was successful.  If false, approximate
+        values based on moments are returned in lsq_success.
+
+    Notes
+    -----
+    .. Uses least squares.  This is not the fastest way.
+    .. Returns the approximations of the parameters based on moments
+       if least squares fails.
+    """
+
+    # Perform optimization using nonlinear least squares
+    popt, junk_output, info_dict, mesg, ier = \
+            scipy.optimize.leastsq(_sym_gaussian_plus_background_resids, p_0, 
+                                   args=(x, y, z), full_output=True)
+
+    # Check to make sure leastsq was successful.  If not, return centroid
+    # estimate.
+    if ier in (1, 2, 3, 4):
+        return np.array((popt[0]**2, popt[1]**2, popt[2], popt[3], 
+                         np.abs(popt[4]))), True
     else:
         return p_0, False
