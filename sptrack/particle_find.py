@@ -56,7 +56,7 @@ def preprocess(im, blur=True, boxcar=True, noise_size=1, boxcar_width=5):
 
     # Perform Gaussian blur
     if blur:
-        im_blur = skimage.filters.gaussian_filter(im, noise_size)
+        im_blur = skimage.filters.gaussian(im, noise_size)
     else:
         im_blur = im
 
@@ -122,8 +122,8 @@ def center_of_mass(x, y, z):
 
 
 #%%
-def subpixel_locate(im, peak, selem, n_iters=20, fit_gauss=True, 
-                    fit_gauss_bg=True, return_estimate_on_error=True, 
+def subpixel_locate(im, peak, selem, n_iters=10, fit_gauss=True,
+                    fit_gauss_bg=True, return_estimate_on_error=True,
                     quiet=True):
     """
     Perform subpixel localization of a subimage with a spot.
@@ -136,7 +136,7 @@ def subpixel_locate(im, peak, selem, n_iters=20, fit_gauss=True,
     selem : ndarray
         Structuring element for the spot region.
     n_iters : int
-        Number of iterations for center-of-mass fractional 
+        Number of iterations for center-of-mass fractional
         shifting calculation.
     fit_gauss : bool
         If True, fit the spot with a Gaussian peak after
@@ -150,7 +150,7 @@ def subpixel_locate(im, peak, selem, n_iters=20, fit_gauss=True,
         Otherwise, raise a RuntimeError.
     quiet : bool
         If True, suppress reporting and warnings.
-        
+
     Returns
     -------
     output : ndarray, shape(2,)
@@ -184,7 +184,8 @@ def subpixel_locate(im, peak, selem, n_iters=20, fit_gauss=True,
     sub_im = im[i - r_i - 1:i + r_i + 2, j - r_j - 1:j + r_j + 2]
 
     # Compute fractional shift
-    eps_i, eps_j = center_of_mass(i_pos, j_pos, sub_im[1:-1, 1:-1][ii, jj])
+    new_sub_im = sub_im
+    eps_i, eps_j = center_of_mass(i_pos, j_pos, new_sub_im[1:-1, 1:-1][ii, jj])
 
     # Now iterate on this process
     for _ in range(1, n_iters):
@@ -232,7 +233,7 @@ def subpixel_locate(im, peak, selem, n_iters=20, fit_gauss=True,
                     print('    eps_j:', eps_j)
                     print('    sigma:', sigma)
                     print('Setting center to center of mass estimate.')
-                a, eps_i, eps_j, sigma = p_0
+                eps_i, eps_j = p_0[-3:-1]
         else:
             if not quiet:
                 print('Warning: Gaussian fitting in subpixel loc failed with:')
@@ -240,15 +241,16 @@ def subpixel_locate(im, peak, selem, n_iters=20, fit_gauss=True,
                 print('    eps_j:', eps_j)
                 print('    sigma:', sigma)
                 print('Setting center to center of mass estimate.')
-            a, eps_i, eps_j, sigma = p_0
+            eps_i, eps_j = p_0[-3:-1]
 
     return np.array([i + eps_i, j + eps_j])
 
 
 #%%
 def particle_centers(im, particle_size, blur=True, noise_size=1,
-                     boxcar=True, fit_gauss=True, fit_gauss_bg=True, 
-                     selem_width=3, selem_type='disk', n_iters=20, quiet=True):
+                     boxcar=True, fit_gauss=True, fit_gauss_bg=True,
+                     selem_width=3, selem_type='disk', n_iters=10,
+                     thresh_perc=70, quiet=True):
     """
     Find the centers of all putative particles in an image
 
@@ -278,7 +280,10 @@ def particle_centers(im, particle_size, blur=True, noise_size=1,
         The type of structuring element to use in subpixel losalization,
         either 'disk' or 'square;.
     n_iters : int
-        Numner of iterations of fracshifting to do in subpixel localization.
+        Number of iterations of fracshifting to do in subpixel localization.
+    thresh_perc : float in range of [0, 100]
+        Only pixels with intensities above the thresh_perc
+        percentile are considered.  Default = 70.
     """
 
     # Set particle size to the nearest odd integer (minimum of three)
@@ -294,13 +299,13 @@ def particle_centers(im, particle_size, blur=True, noise_size=1,
         raise ValueError('Only disk and square selems allowed.')
     else:
         selem = skimage.morphology.square(selem_width)
- 
+
    # Perform Gaussian blur and background subtraction
     im = preprocess(im, blur=blur, boxcar=boxcar, noise_size=noise_size,
                     boxcar_width=boxcar_width)
 
     # Find maxima to pixel resolution
-    peaks_pixel = local_maxima_pixel(im, part_size)
+    peaks_pixel = local_maxima_pixel(im, part_size, thresh_perc=thresh_perc)
 
     # Initialize array of centers
     centers = np.empty_like(peaks_pixel, dtype=np.float)
@@ -316,9 +321,9 @@ def particle_centers(im, particle_size, blur=True, noise_size=1,
 
 #%%
 def centers_from_ims(im_list, particle_size, blur=True, noise_size=1,
-                     boxcar=True, fit_gauss=True, fit_gauss_bg=True, 
-                     selem_width=3, selem_type='disk', n_iters=20, 
-                     quiet=False):
+                     boxcar=True, fit_gauss=True, fit_gauss_bg=True,
+                     selem_width=3, selem_type='disk', n_iters=10,
+                     thresh_perc=70, quiet=False):
     """
     Compute centers of particles in a list of images.
 
@@ -327,7 +332,8 @@ def centers_from_ims(im_list, particle_size, blur=True, noise_size=1,
     im_list : tuple of strings
         tuple of file names of images.  The files must be readable
         by skimage.io.imread.  The index of the image in the list
-        corresponds to the frame index of the movie.
+        corresponds to the frame index of the movie.  If an entry is
+        '', this is a missed frame.
     particle_size : float
         Diameter of particles in units of pixels.
     blur : bool
@@ -352,7 +358,11 @@ def centers_from_ims(im_list, particle_size, blur=True, noise_size=1,
         The type of structuring element to use in subpixel losalization,
         either 'disk' or 'square;.
     n_iters : int
-        Numner of iterations of fracshifting to do in subpixel localization.
+        Number of iterations of fracshifting to do in subpixel localization.
+    thresh_perc : float in range of [0, 100]
+        Only pixels with intensities above the thresh_perc
+        percentile are considered.  Default = 70.
+
     quiet : bool
         True to supress progress to the screen
 
@@ -364,7 +374,7 @@ def centers_from_ims(im_list, particle_size, blur=True, noise_size=1,
         centers for the respective frame in units of pixels.
     """
     # Initialize DataFrame
-    df = pd.DataFrame(columns=['i', 'j'])
+    df = pd.DataFrame(columns=['frame', 'i', 'j'])
 
     # Get total number of images to process
     n_images = len(im_list)
@@ -373,18 +383,20 @@ def centers_from_ims(im_list, particle_size, blur=True, noise_size=1,
         if not quiet and i % 100 == 0:
             print('Finding beads in image %d of %d....' % (i+1, n_images))
 
-        im = _read_image(fname)
+        if fname != '':
+            im = _read_image(fname)
 
-        centers = particle_centers(
-            im, particle_size, blur=blur, noise_size=noise_size,
-            fit_gauss=fit_gauss, fit_gauss_bg=fit_gauss_bg, 
-            selem_width=selem_width, selem_type=selem_type, n_iters=n_iters, 
-            quiet=quiet)
+            centers = particle_centers(
+                im, particle_size, blur=blur, noise_size=noise_size,
+                fit_gauss=fit_gauss, fit_gauss_bg=fit_gauss_bg,
+                selem_width=selem_width, selem_type=selem_type, n_iters=n_iters,
+                quiet=quiet)
 
-        index = np.ones(centers.shape[0]) * i
-        df2 = pd.DataFrame(columns=['i', 'j'], index=index, data=centers)
+            frame = np.ones((centers.shape[0], 1)) * i
+            data = np.hstack((frame, centers))
+            df2 = pd.DataFrame(columns=['frame', 'i', 'j'], data=data)
 
-        df = df.append(df2)
+            df = df.append(df2, ignore_index=True)
 
     return df
 
@@ -408,11 +420,22 @@ def _read_image(fname):
     im = skimage.io.imread(fname)
     if len(im.shape) == 2:
         return im
+    elif len(im.shape) == 3:
+        channel_dim = im.shape.index(min(im.shape))
+        if channel_dim == 0:
+            for i in range(im.shape[channel_dim]):
+                if np.any(im[i, :, :] != 0):
+                    return im[i, :, :]
+            return im[0, :, :]
+        elif channel_dim == 2:
+            for i in range(im.shape[channel_dim]):
+                if np.any(im[:, :, i] != 0):
+                    return im[:, :, i]
+            return im[:, :, 0]
+        else:
+            raise RuntimeError('Invalid image dimensions.')
     else:
-        for i in range(im.shape[0]):
-            if np.any(im[i, :, :] != 0):
-                return im[i, :, :]
-        return im[0, :, :]
+        raise RuntimeError('Invalid image dimensions.')
 
 
 #%% #########
@@ -649,8 +672,8 @@ def _fit_gaussian(x, y, z, p_0):
         return np.array((popt[0]**2, popt[1], popt[2], np.abs(popt[3]))), True
     else:
         return p_0, False
-        
-        
+
+
 #%%
 def _fit_gaussian_plus_background(x, y, z, p_0):
     """
@@ -688,13 +711,13 @@ def _fit_gaussian_plus_background(x, y, z, p_0):
 
     # Perform optimization using nonlinear least squares
     popt, junk_output, info_dict, mesg, ier = \
-            scipy.optimize.leastsq(_sym_gaussian_plus_background_resids, p_0, 
+            scipy.optimize.leastsq(_sym_gaussian_plus_background_resids, p_0,
                                    args=(x, y, z), full_output=True)
 
     # Check to make sure leastsq was successful.  If not, return centroid
     # estimate.
     if ier in (1, 2, 3, 4):
-        return np.array((popt[0]**2, popt[1]**2, popt[2], popt[3], 
+        return np.array((popt[0]**2, popt[1]**2, popt[2], popt[3],
                          np.abs(popt[4]))), True
     else:
         return p_0, False
